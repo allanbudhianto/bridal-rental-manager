@@ -1,0 +1,212 @@
+// Bridal Rental Manager — Prisma schema (PostgreSQL).
+// The plain-SQL twin of this schema lives in db/migrations/001_init.sql
+// and is the canonical migration (it also carries the CHECK constraints
+// and indexes that Prisma cannot express, e.g. condition_score 1–5).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ItemType {
+  GOWN
+  SUIT
+  ACCESSORY
+}
+
+enum ItemStatus {
+  AVAILABLE
+  RENTED
+  MAINTENANCE
+  RETIRED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  ACTIVE
+  RETURNED
+  CANCELLED
+}
+
+enum FittingStatus {
+  SCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum InspectionKind {
+  PRE_RENTAL
+  POST_RETURN
+}
+
+enum EscrowStatus {
+  HELD
+  RELEASED
+  DISPUTED
+  FORFEITED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  phone     String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  bookings Booking[]
+  fittings FittingAppointment[]
+
+  @@map("customers")
+}
+
+model Item {
+  id           String     @id @default(uuid())
+  name         String
+  type         ItemType
+  style        String
+  size         String
+  rentalCents  Int        @map("rental_cents")
+  valueCents   Int        @map("value_cents")
+  depositCents Int        @map("deposit_cents")
+  status       ItemStatus @default(AVAILABLE)
+  description  String?
+  imageUrl     String?    @map("image_url")
+  createdAt    DateTime   @default(now()) @map("created_at")
+
+  bookings Booking[]
+  fittings FittingAppointment[]
+  packages PackageItem[]
+
+  @@map("items")
+}
+
+model Package {
+  id              String   @id @default(uuid())
+  name            String
+  description     String?
+  discountPercent Int      @default(0) @map("discount_percent")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  items PackageItem[]
+
+  @@map("packages")
+}
+
+model PackageItem {
+  packageId String @map("package_id")
+  itemId    String @map("item_id")
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  item    Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([packageId, itemId])
+  @@map("package_items")
+}
+
+model Booking {
+  id         String        @id @default(uuid())
+  customerId String        @map("customer_id")
+  itemId     String        @map("item_id")
+  startDate  DateTime      @map("start_date") @db.Date
+  endDate    DateTime      @map("end_date") @db.Date
+  status     BookingStatus @default(PENDING)
+  totalCents Int           @map("total_cents")
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  customer    Customer              @relation(fields: [customerId], references: [id])
+  item        Item                  @relation(fields: [itemId], references: [id])
+  inspections HandoverInspection[]
+  escrow      DepositEscrow?
+  payments    Payment[]
+
+  @@index([itemId, startDate, endDate])
+  @@map("bookings")
+}
+
+model FittingAppointment {
+  id          String        @id @default(uuid())
+  customerId  String        @map("customer_id")
+  itemId      String        @map("item_id")
+  scheduledAt DateTime      @map("scheduled_at")
+  durationMin Int           @default(60) @map("duration_min")
+  status      FittingStatus @default(SCHEDULED)
+  notes       String?
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id])
+  item     Item     @relation(fields: [itemId], references: [id])
+
+  @@index([itemId, scheduledAt])
+  @@map("fitting_appointments")
+}
+
+model HandoverInspection {
+  id             String          @id @default(uuid())
+  bookingId      String          @map("booking_id")
+  kind           InspectionKind
+  photoUrl       String          @map("photo_url")
+  takenAt        DateTime        @default(now()) @map("taken_at") @db.Timestamptz
+  inspectorId    String          @map("inspector_id")
+  // Overall condition, 1 (poor) – 5 (pristine). Enforced 1–5 by a CHECK
+  // constraint in db/migrations/001_init.sql.
+  conditionScore Int             @map("condition_score")
+  notes          String?
+
+  booking Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  defects DefectMap[]
+
+  @@index([bookingId])
+  @@map("handover_inspections")
+}
+
+model DefectMap {
+  id           String @id @default(uuid())
+  inspectionId String @map("inspection_id")
+  zone         String
+  defectType   String @map("defect_type")
+  photoUrl     String @map("photo_url")
+
+  inspection HandoverInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@index([inspectionId])
+  @@map("defect_map")
+}
+
+model DepositEscrow {
+  bookingId   String       @id @map("booking_id")
+  amountCents Int          @map("amount_cents")
+  status      EscrowStatus @default(HELD)
+  releasedAt  DateTime?    @map("released_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("deposit_escrow")
+}
+
+model Payment {
+  id          String        @id @default(uuid())
+  bookingId   String        @map("booking_id")
+  amountCents Int           @map("amount_cents")
+  method      String
+  status      PaymentStatus @default(PENDING)
+  paidAt      DateTime?     @map("paid_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([bookingId])
+  @@map("payments")
+}
